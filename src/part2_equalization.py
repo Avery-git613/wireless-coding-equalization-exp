@@ -16,6 +16,15 @@ from utils import (
 )
 
 
+def _build_convolution_matrix(channel, num_taps):
+    """构造信道与 FIR 系数卷积的 Toeplitz 矩阵。"""
+    conv_len = len(channel) + num_taps - 1
+    A = np.zeros((conv_len, num_taps), dtype=float)
+    for i in range(num_taps):
+        A[i:i+len(channel), i] = channel
+    return A
+
+
 def estimate_zf_equalizer(channel, num_taps):
     """
     估计迫零（Zero-Forcing, ZF）FIR 均衡器。
@@ -38,8 +47,13 @@ def estimate_zf_equalizer(channel, num_taps):
     if num_taps < 1:
         raise ValueError('num_taps 必须为正整数')
 
-    # TODO: 构造卷积矩阵并求解 ZF 均衡器抽头。
-    raise NotImplementedError('请实现 ZF 均衡器估计')
+    A = _build_convolution_matrix(channel, num_taps)
+    d = np.zeros(A.shape[0], dtype=float)
+    center = (A.shape[0] - 1) // 2
+    d[center] = 1.0
+
+    taps, _, _, _ = np.linalg.lstsq(A, d, rcond=None)
+    return taps
 
 
 def apply_fir_filter(signal, taps):
@@ -58,8 +72,13 @@ def apply_fir_filter(signal, taps):
     if signal.ndim != 1 or taps.ndim != 1:
         raise ValueError('signal 和 taps 必须是一维数组')
 
-    # TODO: 使用 np.convolve，并截取与 signal 等长的输出。
-    raise NotImplementedError('请实现 FIR 滤波')
+    # 使用 np.convolve 的 full 模式
+    convolved = np.convolve(signal, taps, mode='full')
+    
+    # 截取前 len(signal) 个样本，使输出与输入等长
+    filtered = convolved[:len(signal)]
+    
+    return filtered
 
 
 def lms_equalizer(rx_train, tx_train, num_taps, step_size=0.01):
@@ -89,8 +108,29 @@ def lms_equalizer(rx_train, tx_train, num_taps, step_size=0.01):
     if num_taps < 1:
         raise ValueError('num_taps 必须为正整数')
 
-    # TODO: 实现 LMS 自适应均衡训练。
-    raise NotImplementedError('请实现 LMS 均衡器')
+    # 初始化抽头，中心位置为 1
+    taps = np.zeros(num_taps, dtype=float)
+    center = num_taps // 2
+    taps[center] = 1.0
+
+    errors = []
+
+    # 从第 num_taps-1 个样本开始迭代，确保有足够的过去样本
+    for n in range(num_taps - 1, len(rx_train)):
+        # 构造当前输入向量 x[n] = [rx_train[n], rx_train[n-1], ..., rx_train[n-num_taps+1]]
+        x = rx_train[n - num_taps + 1:n + 1][::-1]
+
+        # 计算输出 y[n] = w^T x[n]
+        y = np.dot(taps, x)
+
+        # 计算误差 e[n] = d[n] - y[n]
+        e = tx_train[n] - y
+        errors.append(e)
+
+        # 更新抽头 w = w + μ e[n] x[n]
+        taps += step_size * e * x
+
+    return taps, np.asarray(errors, dtype=float)
 
 
 def run_equalization_demo():
